@@ -1,0 +1,202 @@
+---
+title: "Predicting the Carbon Footprint of Automobiles Through Regression Models"
+author: "J Faleiro"
+date: "April 14, 2016"
+output: pdf_document
+---
+
+# Executive Summary
+
+This report is an analysis of data extracted from the 1974 issue of *Motor Trend*, an US automobile magazine. The data comprises fuel consumption and 10 aspects of automobile design and performance for 32 automobiles (1973–74 models).
+
+This analysis concentrates in answering two questions:
+
+* *Is an automatic or manual transmission better for MPG*
+* *Quantify the MPG difference between automatic and manual transmissions*
+
+Our analysis will be conducted in R and will consist of tables, figures and several summaries. We will take special care to document each of the steps, making sure they follow a fully scripted flow and therefore allow for the entire analysis to be entirely reproducible.
+
+# Data Analysis
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(dplyr, tidyr, ggplot2, car)
+```
+```{r echo=FALSE}
+data(mtcars)
+```
+
+## Exploratory Data Analysis 
+
+For our models we need a factor of transmission type, according to the value 0 or 1 in `am` will be respectivelly associated to `automatic` and `manual`.
+
+```{r echo=FALSE}
+mtcars$transmission <- factor(mtcars$am)
+levels(mtcars$transmission) <- c('automatic', 'manual')
+```
+
+With that we can get the first glimpse on how mpg might be correlated to transmission type (**Figure 1**).
+
+```{r echo=FALSE, results='hide', fig.height=3, fig.width=3, fig.align="center"}
+violinPlot <- ggplot(data=mtcars, aes(y=mpg, x=transmission, fill=transmission)) + 
+    geom_violin()
+```
+
+We can see that there is an indication of which is better, on this case manual transmissions. But we know enough about cars and there might be uncorrelated regressors that are affecting the outcome. Our best guess at this point are `wt`, `hp` and `disp` **(Figure 2)**.
+
+As expected, `mpg` is negativelly correlated to all regressors, and on the other hand all regressors are positivelly correlated amongst themselves. We need to select a model that relies on the relevant regressors to infer the lowest error and highest influence of that on the final outcome variable `mpg`.  
+
+## Model Selection Strategy
+
+Our model selection strategy will consider two different types of fitting: linear and logistic poisson regression. 
+
+For each type, we will quantify the uncertainty of that fitting through _nested models_ that will consider, incrementally, a set of regressors:
+
+* `disp`: Displacement (cu.in.)
+* `hp`: Gross horsepower
+* `wt`:	Weight (lb/1000)
+
+For each nested model, we will use `anova()`, analysis of variances, to quantify the uncertainty of adding that additional regressor to infer the model with lowest error and highest influence of that final outcome variable `mpg`. 
+
+The `F statistic` in the analysis of variances tests the predictive capability of the model as a whole - the larger the F value the better our model is at predicting the dependent variable `mpg`. On the other hand, lower F values indicate the model is not as good at predicting the dependent variable.
+
+Three asterisks (***) at the lower right of the printed table indicate that the null hypothesis is rejected at the 0.001 level, so at least one of the two additional regressors is significant. Rejection is based on a right-tailed F test, `Pr(>F)`, applied to an F value.
+
+We will select the model with highest break on `F` value and lowest `Pr(>F)` on the analysis of variances.
+
+Next, we will check patterns of residuals, according to a few guidelines for *well-behaved* [Residuals vs. Fitted plot](https://onlinecourses.science.psu.edu/stat501/node/36) and [Residuals vs Leverage plot](http://strata.uga.edu/6370/rtips/regressionPlots.html), in what they suggest about the appropriateness of the simple linear regression model:
+
+* Residuals vs Fitted plot
+
+    + The residuals "bounce randomly" around the 0 line. This suggests that the assumption that the relationship is linear is reasonable.
+    + The residuals roughly form a "horizontal band" around the 0 line. This suggests that the variances of the error terms are equal.
+    + No one residual "stands out" from the basic random pattern of residuals. This suggests that there are no outliers.
+
+
+* Residuals vs Leverage plot
+
+    + There should be no points with (Cook's distance greated than 0.5.
+
+## Linear Fitting
+
+Following our strategy, the first type of fitting is a linear regression, defined through `lm()`. The strategy also describes a selection of an optimal model through nesting:
+
+```{r echo=FALSE}
+fit1 <- lm(mpg ~ transmission, data=mtcars)
+anova(fit1,
+      update(fit1, mpg ~ transmission + hp),
+      update(fit1, mpg ~ transmission + hp + wt),
+      update(fit1, mpg ~ transmission + hp + wt + disp)
+      )
+```
+
+We can see a clear break on the F statistic value from model 2 to model 3, when F got to **71.3552** before dropping to **9.7773**. The `Pr(>F)` at that level is also very low at $\frac{4.646}{10^9}$ indicating that with formula `mpg ~ transmission + hp` our null-hyphotesis $H_0$ can be safely rejected.
+
+Let's investigate the residuals of the selected model `mpg ~ transmission + hp`, removing the intersect with `-1` **(Figure 3)**.
+
+```{r echo=FALSE}
+fit <- lm(mpg ~ transmission + hp -1, data=mtcars)
+```
+
+According to the guidelines outlined in our strategy to verify residuals this is an appropriate linear regression model. We can move ahead and use coefficients to quantify the mpg difference between automatic and manual
+
+```{r echo=FALSE}
+summary(fit)$coef
+```
+
+```{r}
+automatic <- coef(fit)[1]
+manual <- coef(fit)[2]
+(manual - automatic) / automatic
+```
+
+According to our selected linear model, a manual transmission gives a **19.85%** better mpg ratio, plus or minus a standard error of **1.42**.
+
+## Logistic Fitting
+
+The second type of fitting is a generalized linear regression, GLM, defined through `glm()`. Given the presence of a factor regressor we will be using a Poison family of regressions.
+
+The strategy also describes a selection of an optimal model through nesting:
+
+```{r echo=FALSE}
+fit1 <- glm(as.integer(mpg) ~ transmission, data=mtcars, family=poisson)
+anova(fit1,
+      update(fit1, as.integer(mpg) ~ transmission + hp),
+      update(fit1, as.integer(mpg) ~ transmission + hp + wt),
+      update(fit1, as.integer(mpg) ~ transmission + hp + wt + disp),
+      test='Chisq')
+```
+
+We can see a clear break on the `Deviance` value from model 2 to model 3, when deviance got to 24.1728 before dropping to 4.1314 The Pr(>Chi) at that level is also very low at $\frac{8.807}{10^7}$ indicating that with formula mpg ~ transmission + hp our null-hyphotesis $H_0$ can be safely rejected.
+
+Let’s investigate the residuals of the selected model `mpg ~ transmission + hp`, removing the intersect with `-1` **(Figure 4)**:
+
+```{r echo=FALSE}
+fitl <- glm(as.integer(mpg) ~ transmission + hp -1, data=mtcars, family=poisson)
+```
+
+According to the guidelines outlined in our strategy to verify residuals this is an appropriate logistic poisson regression model. We can move ahead and use coefficients to quantify the mpg difference between automatic and manual
+
+```{r echo=FALSE}
+summary(fitl)$coef
+```
+
+```{r echo=FALSE}
+exp(coef(fitl))
+```
+
+```{r}
+automatic <- exp(coef(fitl)[1])
+manual <- exp(coef(fitl)[2])
+(manual - automatic) / automatic
+```
+
+According to our selected logistic model, a manual transmission gives a **27.13%** better mpg ratio, plus or minus a standard error of **1.09**.
+
+# Conclusions
+
+In conclusion, the answers to our initial questions:
+
+* *Is an automatic or manual transmission better for MPG*
+
+    + In general **manual transmission vehicles performed better than automatic transmission vehicles**, yielding a higher ratio of miles per gallons
+    
+    
+* *Quantify the MPG difference between automatic and manual transmissions*
+
+    + Our regression models provided slightly different answers:
+    
+        + Linear regression model: **19.85% +/- 1.42**
+        + Logistic poisson model: **27.13% +/- 1.09**
+
+\newpage
+# Appendix of Figures
+
+```{r echo=FALSE, fig.height=2.75, fig.width=2.75}
+print(violinPlot)
+```
+
+**Figure 1: Violin Plot of MPG Consumption per Transmission Type**
+
+```{r echo=FALSE, fig.height=6, fig.width=6}
+library(car)
+scatterplotMatrix(~ mpg + wt + hp + disp | transmission, data=mtcars, by.groups=T,
+                  diagonal='boxplot', smooth=T, level=0.95, id.n=2, 
+                  legend.pos='bottomright')
+```
+
+**Figure 2: Scatter Plot Matrix of Regressors Candidates**
+\newpage
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+plot(fit)
+```
+
+**Figure 3: Diagnostic Plots of Linear Model**
+
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+plot(fitl)
+```
+**Figure 4: Diagnostic Plots of Poisson Logistic General Model**
+
